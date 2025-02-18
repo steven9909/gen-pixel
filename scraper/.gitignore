@@ -1,0 +1,7 @@
+/data/
+/venv/
+test.ipynb
+constants.py
+__pycache__/
+/loblaw/
+/wholefoods/
