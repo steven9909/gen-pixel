@@ -1,6 +1,12 @@
 from bs4 import BeautifulSoup
 import requests
-from constants import WHOLEFOODS_URL, LOBLAW_URL
+from constants import (
+    WHOLEFOODS_URL,
+    LOBLAW_URL,
+    FLICKR_KEYWORDS,
+    FLICKR_API_KEY,
+    FLICKR_URL,
+)
 import functools
 import json
 import re
@@ -81,7 +87,7 @@ class LoblawScraper(BaseScraper):
                         if img_tag:
                             img_url = img_tag.get("src")
                             name = tag.find("h3", {"data-testid": "product-title"}).text
-                            product_dict[self.filter_name(name)] = img_url
+                            product_dict[img_url] = self.filter_name(name)
                     except KeyError:
                         print(
                             f"Warning: Missing key in product with name {name} - skipping"
@@ -95,6 +101,10 @@ class LoblawScraper(BaseScraper):
 
 
 class WholeFoodsScraper(BaseScraper):
+    """
+    Technically not a scraper, but just using the api...
+    """
+
     def __init__(self, save_dir, limit=60, rate_limit=0.5):
         super().__init__(WHOLEFOODS_URL, save_dir)
 
@@ -136,9 +146,7 @@ class WholeFoodsScraper(BaseScraper):
 
                 for product in json_dict["results"]:
                     try:
-                        product_dict[self.filter_name(product["name"])] = product[
-                            "imageThumbnail"
-                        ]
+                        product["imageThumbnail"] = self.filter_name(product["name"])
                     except KeyError:
                         print(
                             f"Warning: Missing key in product with name {product['name']} - skipping"
@@ -155,10 +163,66 @@ class WholeFoodsScraper(BaseScraper):
         return product_dict
 
 
+class FlickrScraper(BaseScraper):
+    """
+    Technically not a scraper, but just using the api...
+    """
+
+    def __init__(self, save_dir, pictures_per_category=10, rate_limit=0.5):
+        super().__init__(FLICKR_URL, save_dir)
+
+        self.picture_per_category = pictures_per_category
+        self.rate_limit = rate_limit
+
+    @functools.cached_property
+    def length(self):
+        return len(FLICKR_KEYWORDS)
+
+    def get_photo_ids(self, keyword):
+        params = {
+            "method": "flickr.photos.search",
+            "api_key": FLICKR_API_KEY,
+            "text": keyword,
+            "format": "json",
+            "nojsoncallback": 1,
+            "extras": "url_o",
+            "per_page": 10,
+            "sort": "relevance",
+            "media": "photos",
+            "content_type": 0,
+        }
+        response = requests.get(FLICKR_URL, params=params)
+        data = response.json()
+
+        if "photos" in data:
+            for photo in data["photos"]["photo"]:
+                image_url = photo.get("url_o", None)
+                if image_url:
+                    yield image_url
+        else:
+            print("No photos found for keyword: {keyword}")
+
+    def get_data(self):
+        product_dict = {}
+
+        keyword_i = 0
+        with tqdm(total=self.length) as pbar:
+            while keyword_i < self.length:
+
+                for photo_url in self.get_photo_ids(FLICKR_KEYWORDS[keyword_i]):
+                    product_dict[photo_url] = FLICKR_KEYWORDS[keyword_i]
+
+                pbar.update(1)
+
+        return product_dict
+
+
 def get_scraper(name, args):
     if name == "LoblawScraper":
         return LoblawScraper(**vars(args))
     elif name == "WholeFoodsScraper":
         return WholeFoodsScraper(**vars(args))
+    elif name == "FlickrScraper":
+        return FlickrScraper(**vars(args))
     else:
         raise ValueError(f"Unknown scraper {name}")

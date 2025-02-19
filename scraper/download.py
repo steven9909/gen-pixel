@@ -16,7 +16,7 @@ class Downloader:
         association_dict = {}
         with open(self.json_path, "r") as f:
             data = json.load(f)
-            for i, (name, url) in enumerate(tqdm(data.items())):
+            for i, (url, name) in enumerate(tqdm(data.items())):
                 try:
                     response = requests.get(url)
                 except requests.exceptions.MissingSchema:
