@@ -36,7 +36,7 @@ class Downloader:
 
                 with open(os.path.join(self.save_dir, f"{i}.jpg"), "wb") as f:
                     f.write(response.content)
-                    association_dict[name] = f"{i}.jpg"
+                    association_dict[f"{i}.jpg"] = name
 
         with open(os.path.join(self.save_dir, "association.json"), "w") as f:
             json.dump(association_dict, f)
