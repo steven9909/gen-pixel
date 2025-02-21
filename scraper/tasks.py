@@ -27,7 +27,7 @@ class GetTask(BaseTask):
 
     def run(self, args):
         scraper = get_scraper(args)
-        scraper.save(args.save_dir)
+        scraper.save()
 
 
 class DownloadTask(BaseTask):

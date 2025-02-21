@@ -42,7 +42,7 @@ class BaseScraper:
 
 
 class LoblawScraper(BaseScraper):
-    def __init__(self, save_dir, sleep=5):
+    def __init__(self, save_dir, sleep=5, **kwargs):
         super().__init__(LOBLAW_URL, save_dir)
 
         self.sleep = sleep
@@ -105,7 +105,7 @@ class WholeFoodsScraper(BaseScraper):
     Technically not a scraper, but just using the api...
     """
 
-    def __init__(self, save_dir, limit=60, rate_limit=0.5):
+    def __init__(self, save_dir, limit=60, rate_limit=0.5, **kwargs):
         super().__init__(WHOLEFOODS_URL, save_dir)
 
         self.limit = limit
@@ -146,7 +146,9 @@ class WholeFoodsScraper(BaseScraper):
 
                 for product in json_dict["results"]:
                     try:
-                        product["imageThumbnail"] = self.filter_name(product["name"])
+                        product_dict[product["imageThumbnail"]] = self.filter_name(
+                            product["name"]
+                        )
                     except KeyError:
                         print(
                             f"Warning: Missing key in product with name {product['name']} - skipping"
@@ -168,7 +170,7 @@ class FlickrScraper(BaseScraper):
     Technically not a scraper, but just using the api...
     """
 
-    def __init__(self, save_dir, pictures_per_category=10, rate_limit=0.5):
+    def __init__(self, save_dir, pictures_per_category=10, rate_limit=0.5, **kwargs):
         super().__init__(FLICKR_URL, save_dir)
 
         self.picture_per_category = pictures_per_category
@@ -213,16 +215,17 @@ class FlickrScraper(BaseScraper):
                     product_dict[photo_url] = FLICKR_KEYWORDS[keyword_i]
 
                 pbar.update(1)
+                keyword_i += 1
 
         return product_dict
 
 
-def get_scraper(name, args):
-    if name == "LoblawScraper":
+def get_scraper(args):
+    if args.scraper == "LoblawScraper":
         return LoblawScraper(**vars(args))
-    elif name == "WholeFoodsScraper":
+    elif args.scraper == "WholeFoodsScraper":
         return WholeFoodsScraper(**vars(args))
-    elif name == "FlickrScraper":
+    elif args.scraper == "FlickrScraper":
         return FlickrScraper(**vars(args))
     else:
-        raise ValueError(f"Unknown scraper {name}")
+        raise ValueError(f"Unknown scraper {args.scraper}")
