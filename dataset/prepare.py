@@ -61,6 +61,7 @@ if __name__ == "__main__":
     parser.add_argument("--name", type=str, required=True)
     parser.add_argument("--save_lmdb", action="store_true")
     parser.add_argument("--save_dir", type=str, required=True)
+    parser.add_argument("--discard_outliers", action="store_true")
     args = parser.parse_args()
 
     image_paths = [
