@@ -5,8 +5,11 @@ from torch import Tensor
 import math
 from einops.layers.torch import Rearrange
 from typing import Optional
+from einops import rearrange, repeat, einsum
+from functools import partial
 
 
+# Following the block architecture from Imagen
 class ChanRMSNorm(nn.Module):
     def __init__(self, dim: int):
         """Channel-wise RMS Normalization
@@ -185,9 +188,88 @@ class DownsampleBlock(nn.Module):
         return self.block(x)
 
 
+class CrossAttention(nn.Module):
+    def __init__(
+        self, dim: int, context_dim: int, heads: int, head_dim: int, scale: int = 8
+    ):
+        """Cross Attention Layer
+
+        Args:
+            dim (int): Channel dimension of the input
+            context_dim (int): Channel dimension of the context
+            heads (int): Number of attention heads
+            head_dim (int): Dimension of each attention head
+            scale (int): Scaling factor for attention scores
+        """
+        super().__init__()
+        self.scale = scale
+        self.heads = heads
+        inner_dim = head_dim * heads
+
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)
+        self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
+        self.to_out = nn.Linear(inner_dim, dim, bias=False)
+
+        self.null_kv = nn.Parameter(torch.randn((2, head_dim)))
+
+        self.norm_input = nn.LayerNorm(dim)
+        self.norm_context = nn.LayerNorm(context_dim)
+
+        self.q_scale = nn.Parameter(torch.ones(head_dim))
+        self.k_scale = nn.Parameter(torch.ones(head_dim))
+
+        self.scale = scale
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim, bias=False), nn.LayerNorm(dim)
+        )
+
+    def forward(self, x: Tensor, context: Tensor) -> Tensor:
+        """Forward function of Cross Attention
+
+        Args:
+            x (Tensor): Input tensor of shape (batch_size, (height * width), channel)
+            context (Tensor): Context tensor of shape (batch_size, text_dim, context_dim)
+
+        Returns:
+            Tensor: Output tensor of shape (batch_size, (height * width), channel)
+        """
+        b = x.shape[0]
+        x = self.norm_input(x)
+        context = self.norm_context(context)
+
+        q, k, v = self.to_q(x), *self.to_kv(context).chunk(2, dim=-1)  #
+
+        q = rearrange(q, "b c (h d) -> b h c d", h=self.heads)
+        k = rearrange(k, "b c (h d) -> b h c d", h=self.heads)
+        v = rearrange(v, "b c (h d) -> b h c d", h=self.heads)
+
+        nulls = [
+            repeat(t, "c -> b h 1 c", h=self.heads, b=b)
+            for t in torch.unbind(self.null_kv)
+        ]
+        nk = nulls[0]
+        nv = nulls[1]
+
+        k = torch.cat((k, nk), dim=-2)
+        v = torch.cat((v, nv), dim=-2)
+
+        q = F.normalize(q, dim=-1) * self.q_scale
+        k = F.normalize(k, dim=-1) * self.k_scale
+
+        attn_weights = einsum(q, k, "b h i d, b h k d -> b h i k") * self.scale
+        attn_weights = torch.softmax(attn_weights, dim=-1)
+
+        attn = einsum(attn_weights, v, "b h i k, b h k d -> b h i d")
+        attn = rearrange(attn, "b h i d -> b i (h d)")
+
+        return self.to_out(attn)
+
+
 if __name__ == "__main__":
-    block = ChanRMSNorm(8)
+    block = CrossAttention(dim=8, context_dim=8, heads=8, head_dim=64, scale=8)
 
-    x = torch.randn(1, 8, 4, 4)
+    x = torch.randn(1, 16, 8)
+    context = torch.randn(1, 16, 8)
 
-    print(block(x).shape)
+    print(block(x, context).shape)
