@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import Tensor
 import math
 from einops.layers.torch import Rearrange
-from typing import Optional
+from typing import Optional, Tuple
 from einops import rearrange, repeat, einsum
 from functools import partial
 
@@ -61,7 +61,7 @@ class Block(nn.Module):
         self.act = nn.SiLU()
         self.project = nn.Conv2d(dim_in, dim_out, 3, padding=1)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, scale_shift: Tuple[Tensor] = None) -> Tensor:
         """Forward pass
 
         Args:
@@ -71,8 +71,86 @@ class Block(nn.Module):
             Tensor: Output tensor of shape (batch_size, dim_out, height, width)
         """
         x = self.norm(x)
+
+        if scale_shift is not None:
+            x = x * (scale_shift[0] + 1) + scale_shift[1]
+
         x = self.act(x)
         return self.project(x)
+
+
+class GlobalContext(nn.Module):
+    def __init__(
+        self,
+        dim_in: int,
+        dim_out: int,
+    ):
+        super().__init__()
+        self.to_k = nn.Conv2d(dim_in, 1, 1)
+        hidden_dim = max(3, dim_out // 2)
+
+        self.net = nn.Sequential(
+            nn.Conv2d(dim_in, hidden_dim, 1),
+            nn.SiLU(),
+            nn.Conv2d(hidden_dim, dim_out, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        context = self.to_k(x)
+        x, context = map(lambda t: rearrange(t, "b n ... -> b n (...)"), (x, context))
+        out = einsum(context.softmax(dim=-1), x, "b i n, b c n -> b c i").unsqueeze(-1)
+        return self.net(out)
+
+
+class ResnetBlock(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        dim_out: int,
+        time_cond_dim: Optional[int] = None,
+        cond_dim: Optional[int] = None,
+    ):
+        super().__init__()
+
+        if time_cond_dim is not None:
+            self.time_layer = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(time_cond_dim, dim_out * 2),
+            )
+        else:
+            self.time_layer = None
+
+        if cond_dim is not None:
+            self.cross_attn = CrossAttention(dim=dim_out, context_dim=cond_dim)
+        else:
+            self.cross_attn = None
+
+        self.block1 = Block(dim, dim_out)
+        self.block2 = Block(dim_out, dim_out)
+
+        self.res = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
+
+        self.gca = GlobalContext(dim_out, dim_out)
+
+    def forward(self, x, time_embed=None, cond=None):
+        scale_shift = None
+        if time_embed is not None and self.time_layer is not None:
+            time_embed = self.time_layer(time_embed)
+            time_embed = time_embed.unsqueeze(-1).unsqueeze(-1)
+            scale_shift = time_embed.chunk(2, dim=1)
+
+        h = self.block1(x)
+
+        if self.cross_attn is not None and cond is not None:
+            h = rearrange(h, "b c h w -> b (h w) c")
+            h = self.cross_attn(h, cond) + h
+            h = rearrange(h, "b (h w) c -> b c h w")
+
+        h = self.block2(h, scale_shift)
+        h = h * self.gca(h)
+
+        return h + self.res(x)
 
 
 class SinusoidPE(nn.Module):
@@ -190,7 +268,12 @@ class DownsampleBlock(nn.Module):
 
 class CrossAttention(nn.Module):
     def __init__(
-        self, dim: int, context_dim: int, heads: int, head_dim: int, scale: int = 8
+        self,
+        dim: int,
+        context_dim: int,
+        heads: int = 8,
+        head_dim: int = 64,
+        scale: int = 8,
     ):
         """Cross Attention Layer
 
@@ -267,9 +350,8 @@ class CrossAttention(nn.Module):
 
 
 if __name__ == "__main__":
-    block = CrossAttention(dim=8, context_dim=8, heads=8, head_dim=64, scale=8)
+    block = ResnetBlock(dim=4, dim_out=16)
 
-    x = torch.randn(1, 16, 8)
-    context = torch.randn(1, 16, 8)
+    x = torch.randn(1, 4, 16, 16)
 
-    print(block(x, context).shape)
+    print(block(x).shape)
