@@ -74,6 +74,12 @@ class GlobalContext(nn.Module):
         dim_in: int,
         dim_out: int,
     ):
+        """Global context layer like Squeeze-Excitation layer
+
+        Args:
+            dim_in (int): Channel dimension of the input
+            dim_out (int): Channel dimension of the output
+        """
         super().__init__()
         self.to_k = nn.Conv2d(dim_in, 1, 1)
         hidden_dim = max(3, dim_out // 2)
@@ -86,8 +92,16 @@ class GlobalContext(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
+        """Forward pass
+
+        Args:
+            x (Tensor): Input tensor of shape (batch size, dim_in, height, width)
+
+        Returns:
+            Tensor: Output tensor of shape (batch size, dim_out, height, width)
+        """
         context = self.to_k(x)
-        x, context = map(lambda t: rearrange(t, "b n ... -> b n (...)"), (x, context))
+        x, context = map(lambda t: rearrange(t, "b c ... -> b c (...)"), (x, context))
         out = einsum(context.softmax(dim=-1), x, "b i n, b c n -> b c i").unsqueeze(-1)
         return self.net(out)
 
@@ -105,6 +119,14 @@ class ResnetBlock(nn.Module):
         time_cond_dim: Optional[int] = None,
         cond_dim: Optional[int] = None,
     ):
+        """Resnet block
+
+        Args:
+            dim (int): Channel dimension of the input
+            dim_out (int): Channel dimension of the output
+            time_cond_dim (Optional[int], optional): Time dimension. Defaults to None.
+            cond_dim (Optional[int], optional): Conditional embedding dimension. Defaults to None.
+        """
         super().__init__()
 
         if time_cond_dim is not None:
@@ -127,7 +149,19 @@ class ResnetBlock(nn.Module):
 
         self.gca = GlobalContext(dim_out, dim_out)
 
-    def forward(self, x, time_embed=None, cond=None):
+    def forward(
+        self, x: Tensor, time_embed: Tensor = None, cond: Tensor = None
+    ) -> Tensor:
+        """Forward pass
+
+        Args:
+            x (Tensor): Input tensor of shape (batch_size, dim, height, width)
+            time_embed (Tensor, optional): Time tensor of shape (batch_size, time_cond_dim). Defaults to None.
+            cond (Tensor, optional): Conditional embedding tensor of shape (batch_size, cond_dim). Defaults to None.
+
+        Returns:
+            Tensor: Output tensor of shape (batch_size, dim_out, height, width)
+        """
         scale_shift = None
         if time_embed is not None and self.time_layer is not None:
             time_embed = self.time_layer(time_embed)
