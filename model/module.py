@@ -333,11 +333,10 @@ class SelfAttention(nn.Module):
         head_dim: int = 64,
         scale: int = 8,
     ):
-        """Cross Attention Layer
+        """Self Attention Layer
 
         Args:
             dim (int): Channel dimension of the input
-            context_dim (int): Channel dimension of the context
             heads (int): Number of attention heads
             head_dim (int): Dimension of each attention head
             scale (int): Scaling factor for attention scores
@@ -363,7 +362,7 @@ class SelfAttention(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        """Forward function of Cross Attention
+        """Forward function of Self Attention
 
         Args:
             x (Tensor): Input tensor of shape (batch_size, (height * width), channel)
