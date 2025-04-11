@@ -33,17 +33,6 @@ class ChanRMSNorm(nn.Module):
         return F.normalize(x, dim=1) * self.scale * self.gamma
 
 
-class CrossAttention(nn.Module):
-    def __init__(self, dim_in: int, dim_out: int):
-        """Cross Attention Layer
-
-        Args:
-            dim_in (int): Channel dimension of the input.
-            dim_out (int): Channel dimension of the output.
-        """
-        super().__init__()
-
-
 class Block(nn.Module):
     def __init__(self, dim_in: int, dim_out: int, norm=True):
         """Block for UNet
@@ -61,7 +50,7 @@ class Block(nn.Module):
         self.act = nn.SiLU()
         self.project = nn.Conv2d(dim_in, dim_out, 3, padding=1)
 
-    def forward(self, x: Tensor, scale_shift: Tuple[Tensor] = None) -> Tensor:
+    def forward(self, x: Tensor, scale_shift: Optional[Tuple[Tensor]] = None) -> Tensor:
         """Forward pass
 
         Args:
@@ -72,7 +61,7 @@ class Block(nn.Module):
         """
         x = self.norm(x)
 
-        if scale_shift is not None:
+        if scale_shift is not None and len(scale_shift) >= 2:
             x = x * (scale_shift[0] + 1) + scale_shift[1]
 
         x = self.act(x)
@@ -101,6 +90,11 @@ class GlobalContext(nn.Module):
         x, context = map(lambda t: rearrange(t, "b n ... -> b n (...)"), (x, context))
         out = einsum(context.softmax(dim=-1), x, "b i n, b c n -> b c i").unsqueeze(-1)
         return self.net(out)
+
+
+class UNet(nn.Module):
+    def __init__(self, dim=128):
+        pass
 
 
 class ResnetBlock(nn.Module):
@@ -266,6 +260,103 @@ class DownsampleBlock(nn.Module):
         return self.block(x)
 
 
+class Transformer(nn.Module):
+    def __init__(self, dim, depth, head_dim, heads):
+        super().__init__()
+        self.layers = nn.ModuleList([])
+
+        for _ in range(depth):
+            self.layers.append(
+                nn.ModuleList(
+                    [
+                        SelfAttention(dim=dim, heads=heads, head_dim=head_dim),
+                        nn.Sequential(
+                            nn.LayerNorm(dim),
+                            nn.Linear(dim, dim * 2, bias=False),
+                            nn.GELU(),
+                            nn.LayerNorm(dim * 2),
+                            nn.Linear(dim * 2, dim, bias=False),
+                        ),
+                    ]
+                )
+            )
+
+    def forward(self, x):
+        _, c, h, w = x.shape
+        x = rearrange(x, "b c h w -> b (h w) c")
+        for attn, ff in self.layers:
+            x = attn(x) + x
+            x = ff(x) + x
+        x = rearrange(x, "b (h w) c -> b c h w", h=h, w=w, c=c)
+        return x
+
+
+class SelfAttention(nn.Module):
+    def __init__(
+        self,
+        dim: int,
+        heads: int = 8,
+        head_dim: int = 64,
+        scale: int = 8,
+    ):
+        """Cross Attention Layer
+
+        Args:
+            dim (int): Channel dimension of the input
+            context_dim (int): Channel dimension of the context
+            heads (int): Number of attention heads
+            head_dim (int): Dimension of each attention head
+            scale (int): Scaling factor for attention scores
+        """
+        super().__init__()
+        self.scale = scale
+        self.heads = heads
+        inner_dim = head_dim * heads
+
+        self.to_q = nn.Linear(dim, inner_dim, bias=False)
+        self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
+        self.to_out = nn.Linear(inner_dim, dim, bias=False)
+
+        self.norm_input = nn.LayerNorm(dim)
+
+        self.q_scale = nn.Parameter(torch.ones(head_dim))
+        self.k_scale = nn.Parameter(torch.ones(head_dim))
+
+        self.scale = scale
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim, bias=False), nn.LayerNorm(dim)
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        """Forward function of Cross Attention
+
+        Args:
+            x (Tensor): Input tensor of shape (batch_size, (height * width), channel)
+
+        Returns:
+            Tensor: Output tensor of shape (batch_size, (height * width), channel)
+        """
+        x = self.norm_input(x)
+
+        q, k, v = self.to_q(x), *self.to_kv(x).chunk(2, dim=-1)
+
+        q = rearrange(q, "b c (h d) -> b h c d", h=self.heads)
+        k = rearrange(k, "b c (h d) -> b h c d", h=self.heads)
+        v = rearrange(v, "b c (h d) -> b h c d", h=self.heads)
+
+        q = F.normalize(q, dim=-1) * self.q_scale
+        k = F.normalize(k, dim=-1) * self.k_scale
+
+        attn_weights = einsum(q, k, "b h i d, b h k d -> b h i k") * self.scale
+        attn_weights = torch.softmax(attn_weights, dim=-1)
+
+        attn = einsum(attn_weights, v, "b h i k, b h k d -> b h i d")
+        attn = rearrange(attn, "b h i d -> b i (h d)")
+
+        return self.to_out(attn)
+
+
 class CrossAttention(nn.Module):
     def __init__(
         self,
@@ -350,7 +441,7 @@ class CrossAttention(nn.Module):
 
 
 if __name__ == "__main__":
-    block = ResnetBlock(dim=4, dim_out=16)
+    block = Transformer(dim=4, depth=1, head_dim=64, heads=8)
 
     x = torch.randn(1, 4, 16, 16)
 
